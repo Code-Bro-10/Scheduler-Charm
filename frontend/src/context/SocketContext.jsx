@@ -9,23 +9,27 @@ export const SocketProvider = ({ children }) => {
   const [socket, setSocket] = useState(null);
 
   useEffect(() => {
-    // Attempt to connect to the backend
-    const newSocket = io('http://localhost:5000', {
-      reconnectionAttempts: 3, // Limit reconnection attempts to reduce console noise
-      timeout: 5000,
-      autoConnect: true
+    // Replace this URL with your Render.com backend URL once hosted
+    const socketUrl = import.meta.env.PROD 
+      ? 'https://scheduler-charm-backend.onrender.com' // Example URL, replace with actual
+      : 'http://localhost:5000';
+
+    const newSocket = io(socketUrl, {
+      transports: ['websocket'],
+      reconnectionAttempts: 5
     });
 
-    newSocket.on('connect_error', () => {
-      console.warn('Real-time server (Socket.io) is currently offline. Some features may be limited.');
+    newSocket.on('connect', () => {
+      console.log('Connected to socket server');
+    });
+
+    newSocket.on('connect_error', (err) => {
+      console.warn('Socket connection error (is backend running?):', err.message);
     });
 
     setSocket(newSocket);
 
-    return () => {
-      newSocket.off('connect_error');
-      newSocket.close();
-    };
+    return () => newSocket.close();
   }, []);
 
   return (
