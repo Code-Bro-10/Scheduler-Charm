@@ -9,10 +9,8 @@ export const SocketProvider = ({ children }) => {
   const [socket, setSocket] = useState(null);
 
   useEffect(() => {
-    // Replace this URL with your Render.com backend URL once hosted
-    const socketUrl = import.meta.env.PROD 
-      ? 'https://scheduler-charm-backend.onrender.com' // Example URL, replace with actual
-      : 'http://localhost:5000';
+    // Always connect to local backend (change to your hosted URL if deployed)
+    const socketUrl = 'http://localhost:5000';
 
     const newSocket = io(socketUrl, {
       transports: ['websocket'],

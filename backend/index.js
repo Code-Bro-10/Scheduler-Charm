@@ -24,32 +24,73 @@ io.on('connection', (socket) => {
     console.log(`User joined room: ${email}`);
   });
 
-  socket.on('send_notification', (data) => {
-    io.to(data.room).emit('receive_notification', data);
+  // Handle Initial Meeting Invitation Email
+  socket.on('send_invitation_email', async (data) => {
+    console.log("Invitation email request received:", data);
+    try {
+      await sendMeetingEmail(
+        data.to,
+        `New Meeting Invitation: ${data.meetingTitle}`,
+        data.userName,
+        data.meetingTitle,
+        data.date,
+        data.time,
+        'Pending',
+        data.meetingUrl
+      );
+    } catch (err) {
+      console.error("Failed to send invitation email:", err);
+    }
   });
 
-  // Handle meeting status change and send email
+  // NEW: Handle "Meeting Started" Email
+  socket.on('meeting_started', async (data) => {
+    console.log("Meeting started event received:", data);
+    // Send email to all participants in the group
+    const participants = data.participants; // Array of {email, name}
+    
+    for (const p of participants) {
+      try {
+        await sendMeetingEmail(
+          p.email,
+          `⚠️ SESSION STARTING: ${data.meetingTitle}`,
+          p.name,
+          data.meetingTitle,
+          data.date,
+          data.time,
+          'Approved', // Mark as approved/ready to join
+          data.meetingUrl
+        );
+        console.log(`Start notification sent to ${p.email}`);
+      } catch (err) {
+        console.error(`Failed to send start email to ${p.email}:`, err);
+      }
+    }
+  });
+
+  // Handle meeting status change (Approve/Reject)
   socket.on('meeting_status_change', async (data) => {
     console.log("Status change event received:", data);
-    
-    // 1. Send Real-time notification to the user's browser
     io.to(data.to).emit('receive_notification', {
       message: `Your meeting "${data.meetingTitle}" has been ${data.status}.`,
       type: data.status
     });
 
-    // 2. Send Email Reminder via Resend
-    const subject = data.status === 'Approved' ? 'Meeting Approved! 🚀' : 'Meeting Status Update';
-    await sendMeetingEmail(
-      data.to,
-      subject,
-      data.userName,
-      data.meetingTitle,
-      data.date,
-      data.time,
-      data.status,
-      data.meetingUrl
-    );
+    try {
+      const subject = data.status === 'Approved' ? 'Meeting Approved! 🚀' : 'Meeting Declined ❌';
+      await sendMeetingEmail(
+        data.to,
+        subject,
+        data.userName,
+        data.meetingTitle,
+        data.date,
+        data.time,
+        data.status,
+        data.meetingUrl
+      );
+    } catch (err) {
+      console.error("Failed to send status update email:", err);
+    }
   });
 
   socket.on('disconnect', () => {

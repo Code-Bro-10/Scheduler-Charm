@@ -1,228 +1,297 @@
 import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Calendar as CalendarIcon, Clock, Video, ChevronRight, User as UserIcon, Bell, Sparkles, Plus, CheckCircle2 } from 'lucide-react';
-import { auth, db } from '../firebase';
-import { collection, query, where, getDocs, addDoc, serverTimestamp } from 'firebase/firestore';
+import { 
+  Calendar, Clock, Video, User, Plus, Search, Filter, 
+  CheckCircle2, XCircle, Bell, LayoutGrid, List, Sparkles,
+  ArrowRight, Check, X, Shield, Zap, MessageSquare, Send, AlertCircle,
+  Flag, ExternalLink
+} from 'lucide-react';
+import { db, auth } from '../firebase';
+import { collection, addDoc, getDocs, query, where, serverTimestamp, doc, updateDoc, onSnapshot, getDoc, setDoc } from 'firebase/firestore';
 import { useSocket } from '../context/SocketContext';
 
 export default function UserDashboard() {
-  const [selectedDate, setSelectedDate] = useState(new Date().toISOString().split('T')[0]);
-  const [topic, setTopic] = useState('');
-  const [selectedSlot, setSelectedSlot] = useState('');
-  const [upcomingMeetings, setUpcomingMeetings] = useState([]);
-  const [loading, setLoading] = useState(false);
-  const [notifications, setNotifications] = useState([]);
-  const socket = useSocket();
+  const [meetings, setMeetings] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [isAvailable, setIsAvailable] = useState(true);
   const user = auth.currentUser;
+  const socket = useSocket();
+  const [notifications, setNotifications] = useState([]);
+  
+  const [rejectionId, setRejectionId] = useState(null);
+  const [rejectionReason, setRejectionReason] = useState('');
 
-  const availableSlots = [
-    "09:00 AM", "10:30 AM", "01:00 PM", "02:30 PM", "04:00 PM"
-  ];
-
-  const aiSuggestions = [
-    { time: "11:00 AM", reason: "Most productive for you", confidence: 95 },
-    { time: "03:30 PM", reason: "Gap between existing calls", confidence: 88 }
-  ];
-
-  useEffect(() => {
-    if (user) {
-      fetchMeetings();
-    }
-  }, [user]);
+  const [workingHours, setWorkingHours] = useState({ start: '09:00', end: '18:00' });
+  const [updatingHours, setUpdatingHours] = useState(false);
 
   useEffect(() => {
+    if (!user) return;
+
+    // Fetch user profile and working hours
+    const fetchProfile = async () => {
+      try {
+        const userRef = doc(db, 'users', user.uid);
+        const userSnap = await getDoc(userRef);
+        if (userSnap.exists()) {
+          const data = userSnap.data();
+          setIsAvailable(data.isAvailable ?? true);
+          if (data.workingHours) setWorkingHours(data.workingHours);
+        } else {
+          // Initialize user doc if missing
+          await setDoc(userRef, { 
+            uid: user.uid,
+            name: user.displayName || 'Team Member', 
+            email: user.email, 
+            isAvailable: true, 
+            role: 'User',
+            workingHours: { start: '09:00', end: '18:00' }
+          }, { merge: true });
+        }
+      } catch (err) { console.error("Profile fetch error:", err); }
+    };
+    fetchProfile();
+
+    // Listen for meetings assigned to this user
+    const q = query(collection(db, 'meetings'), where('userEmail', '==', user.email));
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const meetList = [];
+      snapshot.forEach((doc) => {
+        meetList.push({ id: doc.id, ...doc.data() });
+      });
+      
+      const sorted = meetList.sort((a, b) => {
+        const dateA = a.createdAt?.toDate ? a.createdAt.toDate() : new Date();
+        const dateB = b.createdAt?.toDate ? b.createdAt.toDate() : new Date();
+        return dateB - dateA;
+      });
+      
+      setMeetings(sorted);
+      setLoading(false);
+    });
+
     if (socket) {
-      socket.emit('join_room', user?.email);
+      socket.emit('join_room', user.email);
       socket.on('receive_notification', (data) => {
         setNotifications(prev => [data, ...prev]);
+        // Visual alert for new notifications
+        console.log("New Alert:", data.message);
       });
     }
+
     return () => {
+      unsubscribe();
       if (socket) socket.off('receive_notification');
     };
-  }, [socket, user]);
+  }, [user, socket]);
 
-  const fetchMeetings = async () => {
+  const toggleAvailability = async () => {
     try {
-      // FIX: Removed 'orderBy' from Firestore query to avoid the "Index Required" error.
-      // We will sort the results in JavaScript instead.
-      const q = query(
-        collection(db, 'meetings'),
-        where('userEmail', '==', user.email)
-      );
-      const querySnapshot = await getDocs(q);
-      const meetings = [];
-      querySnapshot.forEach((doc) => {
-        meetings.push({ id: doc.id, ...doc.data() });
-      });
-
-      // Sort by date and time in JavaScript
-      const sortedMeetings = meetings.sort((a, b) => {
-        return new Date(`${a.date} ${a.time}`) - new Date(`${b.date} ${b.time}`);
-      });
-
-      setUpcomingMeetings(sortedMeetings);
-    } catch (err) {
-      console.error('Error fetching meetings:', err);
-    }
+      const newStatus = !isAvailable;
+      setIsAvailable(newStatus);
+      await setDoc(doc(db, 'users', user.email), { isAvailable: newStatus }, { merge: true });
+    } catch (err) { console.error("Toggle error:", err); }
   };
 
-  const handleBooking = async () => {
-    if (!topic || !selectedSlot) return;
-    setLoading(true);
+  const handleApprove = async (meetingId) => {
+    const meeting = meetings.find(m => m.id === meetingId);
     try {
-      await addDoc(collection(db, 'meetings'), {
-        title: topic,
-        date: selectedDate,
-        time: selectedSlot,
-        userEmail: user.email,
-        userName: user.displayName || user.email.split('@')[0],
-        status: 'Pending',
-        platform: 'Jitsi Meet',
-        meetingUrl: `https://meet.jit.si/${encodeURIComponent(topic)}-${Date.now()}`,
-        createdAt: serverTimestamp()
-      });
-      setTopic('');
-      setSelectedSlot('');
-      fetchMeetings();
-      if (socket) socket.emit('send_notification', { room: 'admin_room', message: `New meeting request from ${user.displayName}` });
-    } catch (err) {
-      console.error(err);
-    }
-    setLoading(false);
+      await updateDoc(doc(db, 'meetings', meetingId), { status: 'Approved' });
+      if (socket) {
+        socket.emit('meeting_status_change', {
+          to: 'admin@system.com',
+          userName: user.displayName || 'Team Member',
+          meetingTitle: meeting?.title || 'Sync',
+          date: meeting?.date,
+          time: meeting?.time,
+          status: 'Approved',
+          meetingUrl: meeting?.meetingUrl
+        });
+      }
+    } catch (err) { console.error(err); }
   };
 
-  const joinMeeting = (url) => {
-    window.open(url, '_blank');
+  const handleReject = async () => {
+    if (!rejectionReason.trim()) return alert("Provide a reason");
+    const meeting = meetings.find(m => m.id === rejectionId);
+    try {
+      await updateDoc(doc(db, 'meetings', rejectionId), { status: 'Rejected', rejectionReason });
+      if (socket) {
+        socket.emit('meeting_status_change', {
+          to: 'admin@system.com',
+          userName: user.displayName || 'Team Member',
+          meetingTitle: meeting?.title || 'Sync',
+          date: meeting?.date,
+          time: meeting?.time,
+          status: 'Rejected',
+          rejectionReason: rejectionReason,
+          meetingUrl: meeting?.meetingUrl
+        });
+      }
+      setRejectionId(null);
+      setRejectionReason('');
+    } catch (err) { console.error(err); }
+  };
+
+  const handleUpdateWorkingHours = async (e) => {
+    e.preventDefault();
+    setUpdatingHours(true);
+    try {
+      await updateDoc(doc(db, 'users', user.uid), { workingHours });
+      alert("Daily schedule updated!");
+    } catch (err) { console.error(err); }
+    setUpdatingHours(false);
   };
 
   return (
-    <div className="flex-grow flex flex-col z-10 pt-4 px-4 pb-8 max-w-[1400px] w-full mx-auto gap-8">
-      <header className="flex justify-between items-start mb-4">
+    <div className="flex-grow flex flex-col p-6 max-w-[1400px] mx-auto w-full gap-8 z-10 overflow-hidden">
+      <AnimatePresence>
+        {rejectionId && (
+          <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
+             <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setRejectionId(null)} className="absolute inset-0 bg-black/90 backdrop-blur-md" />
+             <motion.div initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.9, opacity: 0 }} className="relative w-full max-w-md glass-panel p-10 rounded-[3rem] bg-[#0c0c0e] border-white/10 shadow-2xl">
+                <h3 className="text-2xl font-black italic mb-2 tracking-tighter">Decline Sync</h3>
+                <p className="text-[10px] font-black text-gray-500 uppercase tracking-widest mb-6">Briefly explain why you can't attend</p>
+                <textarea value={rejectionReason} onChange={(e) => setRejectionReason(e.target.value)} placeholder="Reason for rejection..." className="w-full h-32 bg-white/5 border border-white/10 rounded-2xl p-5 text-sm outline-none focus:border-red-500/50 transition-all text-white" />
+                <div className="flex gap-4 mt-8">
+                   <button onClick={() => setRejectionId(null)} className="flex-grow py-4 rounded-2xl bg-white/5 text-gray-500 font-bold uppercase text-[10px] tracking-widest hover:bg-white/10 transition-all">Cancel</button>
+                   <button onClick={handleReject} className="flex-grow py-4 rounded-2xl bg-red-600 text-white font-black uppercase text-[10px] tracking-widest shadow-xl shadow-red-900/20">Submit</button>
+                </div>
+             </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-6">
         <div>
-          <motion.h1 initial={{ x: -20, opacity: 0 }} animate={{ x: 0, opacity: 1 }} className="text-4xl font-bold mb-2">Hello, {user?.displayName?.split(' ')[0]}</motion.h1>
-          <p className="text-gray-400 flex items-center gap-2">
-            <Sparkles className="w-4 h-4 text-purple-400" />
-            AI predicts a 15% productivity boost if you schedule your focus time now.
-          </p>
+          <h1 className="text-5xl font-black bg-clip-text text-transparent bg-gradient-to-r from-white to-gray-600 italic tracking-tighter">Workspace</h1>
+          <div className="flex items-center gap-3 mt-3">
+            <div className={`w-3 h-3 rounded-full ${isAvailable ? 'bg-green-500 shadow-[0_0_15px_rgba(34,197,94,0.7)]' : 'bg-red-500 shadow-[0_0_15px_rgba(239,68,68,0.7)]'}`} />
+            <span className="text-xs font-black text-gray-500 uppercase tracking-[0.3em]">{isAvailable ? 'Network Active' : 'Mode: Busy'}</span>
+          </div>
         </div>
-        <div className="flex gap-4">
-          <button className="relative p-3 rounded-2xl glass-panel hover:bg-white/10 transition-colors">
-            <Bell className="w-6 h-6 text-gray-300" />
-            {notifications.length > 0 && <span className="absolute top-2 right-2 w-3 h-3 bg-red-500 rounded-full border-2 border-background animate-pulse" />}
-          </button>
-          <div className="w-12 h-12 rounded-2xl bg-gradient-to-tr from-blue-600 to-purple-600 flex items-center justify-center p-[1px] shadow-lg">
-             {user?.photoURL ? (
-              <img src={user.photoURL} alt="Profile" className="w-full h-full rounded-2xl object-cover" />
+        <button onClick={toggleAvailability} className={`px-12 py-4 rounded-2xl font-black transition-all border tracking-widest text-xs ${isAvailable ? 'bg-green-500/10 text-green-400 border-green-500/20 hover:bg-green-500/20 shadow-xl shadow-green-900/10' : 'bg-red-500/10 text-red-400 border-red-500/20 hover:bg-red-500/20 shadow-xl shadow-red-900/10'}`}>
+           {isAvailable ? 'SWITCH TO BUSY' : 'RESTORE CONNECTIVITY'}
+        </button>
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+        <div className="lg:col-span-2 space-y-6">
+          <div className="flex items-center justify-between">
+             <h2 className="text-xl font-black flex items-center gap-3 tracking-widest uppercase opacity-60"><Sparkles className="w-5 h-5 text-purple-400" /> Transmission Logs</h2>
+             <span className="text-[10px] font-black text-gray-600 bg-white/5 px-4 py-1.5 rounded-full uppercase tracking-widest border border-white/5">{meetings.length} Total</span>
+          </div>
+          
+          <div className="grid gap-5">
+            {loading ? (
+               <div className="p-20 text-center glass-panel rounded-[3rem] opacity-30"><p className="font-black uppercase tracking-widest">Scanning Network...</p></div>
+            ) : meetings.length === 0 ? (
+              <div className="glass-panel p-24 rounded-[4rem] text-center border-white/5 bg-white/[0.01]">
+                 <AlertCircle className="w-12 h-12 text-white/10 mx-auto mb-6" />
+                 <p className="text-sm font-bold uppercase tracking-[0.3em] opacity-30">No active transmissions detected</p>
+              </div>
             ) : (
-              <div className="w-full h-full rounded-2xl bg-[#09090b] flex items-center justify-center font-bold">{user?.email[0].toUpperCase()}</div>
+              meetings.map((m) => (
+                <motion.div key={m.id} layout initial={{ opacity: 0, x: -20 }} animate={{ opacity: 1, x: 0 }} className={`glass-panel p-8 rounded-[3rem] border transition-all ${m.isLive ? 'border-green-500/30 bg-gradient-to-br from-green-500/10 to-transparent shadow-2xl shadow-green-900/10' : m.isEnded ? 'opacity-30 grayscale' : 'border-white/5 hover:border-white/10'}`}>
+                  <div className="flex flex-col md:flex-row md:items-center justify-between gap-8">
+                    <div className="flex items-center gap-8">
+                      <div className={`w-16 h-16 rounded-[1.5rem] flex flex-col items-center justify-center font-bold border transition-all ${m.isEnded ? 'bg-white/5 border-white/5' : m.isLive ? 'bg-green-500/20 border-green-500/50' : 'bg-purple-500/10 border-purple-500/20'}`}>
+                         <span className="text-lg text-purple-300 tracking-tighter">{m.date.split('-')[2]}</span>
+                         <span className="text-[10px] uppercase text-purple-500/40 font-black">{new Date(m.date).toLocaleString('default', { month: 'short' })}</span>
+                      </div>
+                      <div>
+                        <h3 className={`font-black text-2xl italic tracking-tighter ${m.isEnded ? 'line-through text-gray-700' : 'text-gray-100'}`}>{m.title}</h3>
+                        <div className="flex items-center gap-4 text-[10px] text-gray-500 mt-2 font-black uppercase tracking-widest">
+                          <span className="flex items-center gap-2 bg-white/5 px-3 py-1 rounded-lg border border-white/5"><Clock className="w-3 h-3 text-purple-400" /> {m.time}</span>
+                          {m.isLive && <span className="text-green-400 animate-pulse bg-green-400/10 px-3 py-1 rounded-lg border border-green-400/20 flex items-center gap-1.5"><Zap className="w-3 h-3" /> LIVE UNIT ACTIVE</span>}
+                          {m.isEnded && <span className="bg-white/5 px-3 py-1 rounded-lg border border-white/5">ARCHIVED</span>}
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-4">
+                      {m.isEnded ? (
+                         <div className="px-8 py-3 bg-white/5 rounded-2xl border border-white/5 text-gray-600 font-black uppercase text-[10px] tracking-widest">Protocol Complete</div>
+                      ) : m.status === 'Pending' ? (
+                        <div className="flex gap-3">
+                           <button onClick={() => handleApprove(m.id)} className="px-10 py-4 rounded-2xl bg-purple-600 text-white font-black shadow-xl shadow-purple-900/30 hover:scale-[1.05] transition-all uppercase text-[10px] tracking-widest">Authorize</button>
+                           <button onClick={() => setRejectionId(m.id)} className="p-4 rounded-2xl bg-white/5 hover:bg-red-500/20 hover:text-red-400 transition-all border border-white/5"><X className="w-5 h-5" /></button>
+                        </div>
+                      ) : m.status === 'Approved' ? (
+                        m.isLive ? (
+                          <button onClick={() => joinMeeting(m.meetingUrl)} className="px-12 py-4 rounded-2xl bg-gradient-to-r from-green-400 to-emerald-500 text-black font-black flex items-center gap-3 hover:scale-[1.05] transition-all shadow-2xl shadow-green-500/30 uppercase text-[10px] tracking-widest"><Video className="w-5 h-5" /> JOIN TRANSMISSION</button>
+                        ) : (
+                          <div className="flex items-center gap-3 px-6 py-3 bg-yellow-500/5 rounded-2xl border border-yellow-500/20">
+                             <div className="w-2 h-2 rounded-full bg-yellow-500 animate-ping shadow-[0_0_10px_rgba(234,179,8,0.5)]" />
+                             <span className="text-[10px] font-black text-yellow-500 uppercase tracking-[0.2em]">Awaiting Admin</span>
+                          </div>
+                        )
+                      ) : (
+                        <div className="px-8 py-3 bg-red-500/5 rounded-2xl border border-red-500/10 text-red-500/30 font-black uppercase text-[10px] tracking-[0.3em]">Invitation Declined</div>
+                      )}
+                    </div>
+                  </div>
+                </motion.div>
+              ))
             )}
           </div>
         </div>
-      </header>
 
-      <div className="grid grid-cols-1 xl:grid-cols-12 gap-8">
-        <div className="xl:col-span-8 space-y-8">
-          <motion.div initial={{ y: 20, opacity: 0 }} animate={{ y: 0, opacity: 1 }} className="glass-panel rounded-[2.5rem] p-8 border border-white/5 relative overflow-hidden">
-            <div className="absolute -right-20 -top-20 w-64 h-64 bg-purple-600/10 rounded-full blur-3xl pointer-events-none" />
-            <h2 className="text-2xl font-bold mb-8 flex items-center gap-3">
-              <Plus className="w-6 h-6 text-purple-400" />
-              Instant Booking
-            </h2>
-
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-10">
-              <div className="space-y-6">
-                <div>
-                  <label className="text-xs font-bold uppercase tracking-widest text-gray-500 mb-3 block">Topic</label>
-                  <input type="text" value={topic} onChange={e => setTopic(e.target.value)} placeholder="What's this meeting about?" className="w-full bg-white/5 border border-white/10 rounded-2xl p-4 text-white focus:ring-2 focus:ring-purple-500 transition-all placeholder-gray-600 outline-none" />
-                </div>
-                <div>
-                  <label className="text-xs font-bold uppercase tracking-widest text-gray-500 mb-3 block">Date</label>
-                  <input type="date" value={selectedDate} onChange={e => setSelectedDate(e.target.value)} className="w-full bg-white/5 border border-white/10 rounded-2xl p-4 text-white focus:ring-2 focus:ring-purple-500 transition-all outline-none" />
-                </div>
-              </div>
-
-              <div>
-                <label className="text-xs font-bold uppercase tracking-widest text-gray-500 mb-3 block">Suggested by Charm AI</label>
-                <div className="grid grid-cols-1 gap-3">
-                  {aiSuggestions.map((s, i) => (
-                    <button key={i} onClick={() => setSelectedSlot(s.time)} className={`p-4 rounded-2xl border transition-all text-left relative group ${selectedSlot === s.time ? 'border-purple-500 bg-purple-500/10' : 'border-white/10 hover:border-white/30 bg-white/5'}`}>
-                      <div className="flex justify-between items-center">
-                        <span className="font-bold">{s.time}</span>
-                        <span className="text-[10px] text-purple-400 font-bold bg-purple-500/10 px-2 py-1 rounded">{s.confidence}% match</span>
-                      </div>
-                      <p className="text-xs text-gray-400 mt-1">{s.reason}</p>
-                    </button>
-                  ))}
-                  <div className="flex items-center gap-2 my-2"><div className="flex-grow border-t border-white/5" /><span className="text-[10px] text-gray-600 font-bold">OR SELECT MANUAL</span><div className="flex-grow border-t border-white/5" /></div>
-                  <div className="grid grid-cols-3 gap-2">
-                    {availableSlots.slice(0, 3).map((slot, i) => (
-                      <button key={i} onClick={() => setSelectedSlot(slot)} className={`p-2 rounded-xl border text-[10px] font-bold transition-all ${selectedSlot === slot ? 'border-blue-500 bg-blue-500/20' : 'border-white/10 hover:bg-white/5'}`}>{slot}</button>
-                    ))}
+        <div className="space-y-6">
+          <div className="glass-panel p-10 rounded-[4rem] bg-gradient-to-br from-purple-600/5 to-transparent border border-white/5 shadow-xl">
+            <h3 className="font-black mb-8 text-[10px] tracking-[0.4em] uppercase opacity-30 flex items-center gap-2"><Clock className="w-4 h-4" /> Office Schedule</h3>
+            <form onSubmit={handleUpdateWorkingHours} className="space-y-6">
+               <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-1">
+                    <label className="text-[8px] font-black text-gray-500 uppercase ml-2 tracking-widest">Start</label>
+                    <input type="time" value={workingHours.start} onChange={e => setWorkingHours({...workingHours, start: e.target.value})} className="w-full bg-white/5 border border-white/10 rounded-2xl p-4 text-[10px] font-black uppercase text-white outline-none focus:border-purple-500" />
                   </div>
-                </div>
-                <button onClick={handleBooking} disabled={loading} className="w-full mt-8 py-4 rounded-2xl bg-gradient-to-r from-purple-600 to-blue-600 text-white font-bold text-lg shadow-[0_10px_30px_rgba(124,58,237,0.3)] hover:translate-y-[-2px] transition-all">
-                  {loading ? 'Analyzing...' : 'Secure Slot'}
-                </button>
-              </div>
-            </div>
-          </motion.div>
-
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-            <div className="glass-panel p-6 rounded-3xl border border-white/5">
-              <h3 className="font-bold mb-4 flex items-center gap-2"><CheckCircle2 className="w-5 h-5 text-green-400" />Action Items</h3>
-              <div className="space-y-3">
-                {['Prepare Q3 Report', 'Email Team Leads', 'Review Designs'].map((t, i) => (
-                  <div key={i} className="flex items-center gap-3 p-3 rounded-xl bg-white/5 border border-white/5 hover:bg-white/10 transition-colors cursor-pointer">
-                    <div className="w-4 h-4 rounded border border-gray-500" />
-                    <span className="text-sm text-gray-300">{t}</span>
+                  <div className="space-y-1">
+                    <label className="text-[8px] font-black text-gray-500 uppercase ml-2 tracking-widest">End</label>
+                    <input type="time" value={workingHours.end} onChange={e => setWorkingHours({...workingHours, end: e.target.value})} className="w-full bg-white/5 border border-white/10 rounded-2xl p-4 text-[10px] font-black uppercase text-white outline-none focus:border-purple-500" />
                   </div>
-                ))}
-              </div>
-            </div>
-            <div className="glass-panel p-6 rounded-3xl border border-white/5 bg-gradient-to-br from-blue-600/10 to-transparent">
-              <h3 className="font-bold mb-4">Charm Score</h3>
-              <div className="flex items-end gap-2">
-                <span className="text-5xl font-black text-blue-400">92</span>
-                <span className="text-sm text-gray-500 mb-2">/ 100</span>
-              </div>
-              <p className="text-xs text-gray-400 mt-2">You are 8% more organized than last week! Keep it up.</p>
+               </div>
+               <button type="submit" disabled={updatingHours} className="w-full py-4 bg-purple-500/10 hover:bg-purple-500/20 text-purple-400 border border-purple-500/30 rounded-2xl font-black text-[9px] uppercase tracking-widest transition-all">
+                 {updatingHours ? 'Saving...' : 'Sync Schedule'}
+               </button>
+            </form>
+          </div>
+
+          <div className="glass-panel p-10 rounded-[4rem] bg-gradient-to-br from-purple-600/5 to-transparent border border-white/5 shadow-xl">
+            <h3 className="font-black mb-8 text-[10px] tracking-[0.4em] uppercase opacity-30 flex items-center gap-2"><Shield className="w-4 h-4" /> Security Terminal</h3>
+            <div className="space-y-8">
+               <div className="flex gap-5">
+                  <div className="p-4 bg-purple-500/10 rounded-2xl h-fit border border-purple-500/20"><Zap className="w-6 h-6 text-purple-400" /></div>
+                  <div>
+                    <p className="font-black text-sm tracking-tight text-white/90 italic">Node Sync Enabled</p>
+                    <p className="text-[10px] text-gray-500 leading-relaxed uppercase font-black mt-2 tracking-wider">Your dashboard is synchronized with enterprise protocols.</p>
+                  </div>
+               </div>
+               <div className="pt-6 border-t border-white/5">
+                  <div className="flex justify-between items-center mb-3">
+                     <span className="text-[10px] font-black text-gray-600 uppercase tracking-widest">Network Load</span>
+                     <span className="text-[10px] font-black text-purple-400">OPTIMAL</span>
+                  </div>
+                  <div className="h-1.5 bg-white/5 rounded-full overflow-hidden">
+                     <motion.div initial={{ width: 0 }} animate={{ width: '65%' }} transition={{ duration: 2 }} className="h-full bg-gradient-to-r from-purple-600 to-indigo-500" />
+                  </div>
+               </div>
             </div>
           </div>
-        </div>
-
-        <div className="xl:col-span-4 space-y-8">
-           <div className="space-y-6">
-            <h2 className="text-xl font-bold flex items-center gap-2"><Clock className="w-5 h-5 text-purple-400" />Active Sessions</h2>
-            <div className="space-y-4">
-              <AnimatePresence>
-                {upcomingMeetings.length === 0 ? (
-                  <p className="text-gray-500 text-center py-10">No meetings scheduled.</p>
+          
+          <div className="glass-panel p-10 rounded-[4rem] border border-white/5 overflow-hidden relative">
+             <div className="absolute inset-0 bg-gradient-to-br from-indigo-500/5 to-transparent pointer-events-none" />
+             <h3 className="font-black mb-6 text-[10px] tracking-[0.4em] uppercase opacity-30">Notifications</h3>
+             <div className="space-y-4 max-h-[300px] overflow-y-auto pr-2 custom-scrollbar">
+                {notifications.length === 0 ? (
+                   <p className="text-[10px] font-black text-gray-700 uppercase tracking-widest text-center py-10 italic">Buffer Empty</p>
                 ) : (
-                  upcomingMeetings.map((m, i) => (
-                    <motion.div key={m.id} initial={{ x: 20, opacity: 0 }} animate={{ x: 0, opacity: 1 }} transition={{ delay: i * 0.1 }} className="glass-panel p-5 rounded-3xl border border-white/5 group relative overflow-hidden">
-                      <div className={`absolute left-0 top-0 w-1 h-full ${m.status === 'Approved' ? 'bg-green-500' : 'bg-yellow-500'}`} />
-                      <div className="flex justify-between items-start mb-4">
-                        <div>
-                          <h4 className="font-bold text-lg group-hover:text-purple-400 transition-colors">{m.title}</h4>
-                          <p className="text-xs text-gray-500">{m.date} • {m.time}</p>
-                        </div>
-                        <span className="text-[10px] bg-white/10 px-2 py-1 rounded text-purple-300 font-bold tracking-widest uppercase">{m.platform}</span>
+                   notifications.map((n, i) => (
+                      <div key={i} className="p-4 bg-white/5 rounded-2xl border border-white/5 text-[10px] font-bold text-gray-400 border-l-2 border-l-purple-500">
+                         {n.message}
                       </div>
-                      <div className="flex justify-between items-center">
-                        <div className="flex -space-x-2">
-                          {[1,2,3].map(j => <div key={j} className="w-6 h-6 rounded-full border-2 border-background bg-gray-800 flex items-center justify-center text-[8px] font-bold">U{j}</div>)}
-                        </div>
-                        <button onClick={() => joinMeeting(m.meetingUrl)} className={`flex items-center gap-2 text-xs font-bold px-4 py-2 rounded-xl transition-all ${m.status === 'Approved' ? 'bg-purple-600 text-white hover:shadow-[0_0_15px_rgba(168,85,247,0.5)]' : 'bg-white/5 text-gray-500 cursor-not-allowed'}`}>
-                          <Video className="w-4 h-4" />
-                          {m.status === 'Approved' ? 'Launch Room' : 'Awaiting Approval'}
-                        </button>
-                      </div>
-                    </motion.div>
-                  ))
+                   ))
                 )}
-              </AnimatePresence>
-            </div>
+             </div>
           </div>
         </div>
       </div>

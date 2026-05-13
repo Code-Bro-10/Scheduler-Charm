@@ -1,66 +1,79 @@
 const nodemailer = require('nodemailer');
 require('dotenv').config();
 
+// Auto-clean the password in code (removes spaces just for the connection)
+// This respects the user's preference to keep spaces in the .env file
+const cleanPass = (process.env.EMAIL_PASS || '').replace(/\s+/g, '');
+
 const transporter = nodemailer.createTransport({
   service: 'gmail',
   auth: {
     user: process.env.EMAIL_USER,
-    pass: process.env.EMAIL_PASS,
+    pass: cleanPass, 
   },
 });
 
+// Verify connection configuration on startup
+transporter.verify((error, success) => {
+  if (error) {
+    console.error('❌ Mail Server Connection Error:', error);
+  } else {
+    console.log('✅ Mail Server is ready to take our messages');
+  }
+});
+
 const sendMeetingEmail = async (to, subject, userName, meetingTitle, date, time, status, meetingUrl) => {
-  try {
-    const mailOptions = {
-      from: `"Scheduler Charm" <${process.env.EMAIL_USER}>`,
-      to: to,
-      subject: subject,
-      html: `
-        <div style="font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; max-width: 600px; margin: auto; padding: 40px; background: #09090b; color: white; border: 1px solid #333; border-radius: 24px;">
-          <div style="text-align: center; margin-bottom: 30px;">
-             <div style="width: 60px; hieght: 60px; background: linear-gradient(135deg, #7c3aed, #3b82f6); border-radius: 15px; margin: auto; display: inline-block; padding: 10px;">
-                <span style="font-size: 30px;">⚡</span>
-             </div>
-             <h1 style="color: white; margin-top: 15px;">Scheduler Charm</h1>
-          </div>
-          
-          <p style="font-size: 18px;">Hi <strong>${userName}</strong>,</p>
-          <p style="color: #a1a1aa; font-size: 16px; line-height: 1.6;">
-            Your meeting request for <strong>"${meetingTitle}"</strong> has been processed by the system.
+  console.log(`📧 Attempting to send email to: ${to}...`);
+  
+  const mailOptions = {
+    from: `"Scheduler Charm" <${process.env.EMAIL_USER}>`,
+    to: to,
+    subject: subject,
+    html: `
+      <div style="font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; max-width: 600px; margin: auto; padding: 20px; border: 1px solid #e0e0e0; border-radius: 15px; background-color: #ffffff;">
+        <div style="text-align: center; padding-bottom: 20px;">
+          <h2 style="color: #6366f1; margin-bottom: 5px;">Scheduler Charm</h2>
+          <p style="color: #6b7280; font-size: 14px; margin-top: 0;">Enterprise Meeting Orchestration</p>
+        </div>
+        
+        <div style="padding: 20px; background: #f9fafb; border-radius: 12px; border: 1px solid #f3f4f6;">
+          <h3 style="color: #111827; margin-top: 0;">Hello ${userName},</h3>
+          <p style="color: #4b5563; line-height: 1.6;">
+            ${status === 'Pending' 
+              ? `You have been invited to a new meeting: <strong>${meetingTitle}</strong>.` 
+              : `Important update regarding your meeting: <strong>${meetingTitle}</strong>.`}
           </p>
           
-          <div style="background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); padding: 25px; border-radius: 20px; margin: 30px 0;">
-            <p style="margin: 0; font-size: 14px; color: #71717a; text-transform: uppercase; letter-spacing: 1px;">Current Status</p>
-            <p style="margin: 5px 0 20px 0; font-size: 24px; font-bold; color: ${status === 'Approved' ? '#22c55e' : '#ef4444'}; text-transform: uppercase;">${status}</p>
-            
-            <div style="border-top: 1px solid rgba(255,255,255,0.1); padding-top: 20px;">
-              <p style="margin: 5px 0; color: #d4d4d8;">📅 <strong>Date:</strong> ${date}</p>
-              <p style="margin: 5px 0; color: #d4d4d8;">🕒 <strong>Time:</strong> ${time}</p>
-            </div>
+          <div style="margin: 20px 0; border-left: 4px solid #6366f1; padding-left: 15px;">
+            <p style="margin: 5px 0; font-size: 14px; color: #374151;"><strong>📅 Date:</strong> ${date}</p>
+            <p style="margin: 5px 0; font-size: 14px; color: #374151;"><strong>⏰ Time:</strong> ${time}</p>
+            <p style="margin: 5px 0; font-size: 14px; color: #374151;"><strong>📊 Status:</strong> <span style="color: ${status === 'Approved' ? '#059669' : status === 'Rejected' ? '#dc2626' : '#d97706'}">${status}</span></p>
           </div>
-          
-          ${status === 'Approved' ? `
-            <div style="text-align: center; margin-top: 40px;">
-              <a href="${meetingUrl}" style="background: linear-gradient(to right, #7c3aed, #3b82f6); color: white; padding: 16px 32px; text-decoration: none; border-radius: 12px; font-weight: bold; font-size: 16px; box-shadow: 0 10px 20px rgba(124, 58, 237, 0.3);">
-                Launch Virtual Meeting Room
-              </a>
-              <p style="color: #71717a; font-size: 12px; margin-top: 20px;">Meeting link: ${meetingUrl}</p>
-            </div>
-          ` : `
-            <p style="color: #71717a; text-align: center;">If you believe this is an error, please reach out to your administrator.</p>
-          `}
-          
-          <div style="margin-top: 60px; padding-top: 20px; border-top: 1px solid rgba(255,255,255,0.1); text-align: center; font-size: 12px; color: #52525b;">
-            <p>© 2026 Scheduler Charm AI. Futuristic Meeting Management.</p>
-          </div>
-        </div>
-      `,
-    };
 
+          ${status === 'Approved' || status === 'Pending' ? `
+            <div style="text-align: center; margin-top: 30px;">
+              <a href="${meetingUrl}" style="background-color: #6366f1; color: white; padding: 14px 28px; text-decoration: none; border-radius: 8px; font-weight: bold; font-size: 16px; display: inline-block; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);">
+                Join Virtual Meeting
+              </a>
+              <p style="color: #9ca3af; font-size: 11px; margin-top: 15px;">Alternatively, copy this link: <br/> ${meetingUrl}</p>
+            </div>
+          ` : ''}
+        </div>
+        
+        <div style="text-align: center; margin-top: 25px; color: #9ca3af; font-size: 12px;">
+          <p>&copy; 2026 Scheduler Charm. All rights reserved.</p>
+        </div>
+      </div>
+    `,
+  };
+
+  try {
     const info = await transporter.sendMail(mailOptions);
-    console.log('Email sent: ' + info.response);
-  } catch (err) {
-    console.error("Nodemailer Error:", err);
+    console.log(`✅ Email successfully delivered to ${to}. ID: ${info.messageId}`);
+    return info;
+  } catch (error) {
+    console.error(`❌ CRITICAL: Email failed to send to ${to}:`, error);
+    throw error;
   }
 };
 
